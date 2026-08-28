@@ -42,17 +42,14 @@ export default function RefundPage() {
           <section>
             <h2 className="text-lg font-bold text-[#d4af37] mb-2">3. How to request a refund</h2>
             <p>
-              All payments are processed by our Merchant of Record, Paddle.com Market Limited ("Paddle"), 30 Old
-              Bailey, London, EC4M 7AU, United Kingdom. Because Paddle is the seller of record for your purchase,
-              refunds are issued through Paddle. You can request a refund by:
+              All payments are processed by our Merchant of Record, Gumroad, Inc. ("Gumroad"), San Francisco,
+              California, USA. Refunds for eligible purchases are issued directly by us through our Gumroad seller
+              account. You can request a refund by:
             </p>
             <ul className="list-disc list-inside mt-2 space-y-1 text-[#a39b8b]">
-              <li>Using the link in the order confirmation email Paddle sent you at checkout, or</li>
-              <li>Contacting Paddle support directly at{' '}
-                <a href="https://paddle.net" target="_blank" rel="noopener noreferrer" className="text-[#d4af37] underline">paddle.net</a>, or
-              </li>
-              <li>Emailing us at <span className="text-[#d4af37]">[your-support-email@example.com]</span> and we
-                will coordinate with Paddle on your behalf.
+              <li>Using the link in the receipt email Gumroad sent you at checkout, or</li>
+              <li>Emailing us at <span className="text-[#d4af37]">[your-support-email@example.com]</span> with your
+                order confirmation and the reason for your request.
               </li>
             </ul>
           </section>
@@ -60,8 +57,8 @@ export default function RefundPage() {
           <section>
             <h2 className="text-lg font-bold text-[#d4af37] mb-2">4. Processing time</h2>
             <p>
-              Approved refunds are typically processed by Paddle within 5–10 business days, though the exact
-              timing for funds to appear back in your account depends on your card issuer or payment provider.
+              Approved refunds are typically processed within 5–10 business days, though the exact timing for
+              funds to appear back in your account depends on your card issuer or payment provider.
             </p>
           </section>
 

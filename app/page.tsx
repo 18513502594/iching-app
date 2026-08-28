@@ -6,7 +6,7 @@ import { calculateFortune, CalcResult } from '@/lib/calc';
 import { CITY_LOCATIONS } from '@/lib/geo';
 import { getHexNameEn, LUCK_EN } from '@/lib/hexagram-names-en';
 import { generateFreeSummaryEn, generateFullReadingEn, palaceLabelEn } from '@/lib/interpret-en';
-import { PADDLE_CLIENT_TOKEN, PADDLE_PRICE_ID, PADDLE_ENV, PRICE_DISPLAY } from '@/lib/paddle-config';
+import { GUMROAD_PRODUCT_URL, PRICE_DISPLAY } from '@/lib/gumroad-config';
 
 const LINE_LABEL = ['1st', '2nd', '3rd', '4th', '5th', '6th'];
 
@@ -79,8 +79,10 @@ export default function Page() {
   const [result, setResult] = useState<CalcResult | null>(null);
 
   const [isPaid, setIsPaid] = useState(false);
-  const [paddleReady, setPaddleReady] = useState(false);
-  const [checkoutLoading, setCheckoutLoading] = useState(false);
+  const [gumroadReady, setGumroadReady] = useState(false);
+  const [licenseKeyInput, setLicenseKeyInput] = useState('');
+  const [verifyingLicense, setVerifyingLicense] = useState(false);
+  const [licenseError, setLicenseError] = useState('');
   const [downloadStatus, setDownloadStatus] = useState<'idle' | 'saved'>('idle');
 
   const resolvedLongitude = useMemo(() => {
@@ -106,32 +108,16 @@ export default function Page() {
     });
   }
 
-  // 加载 Paddle.js 并初始化。Paddle 用页面内弹窗结账（不像 Stripe 会跳走整页），
-  // 所以不需要把生辰数据编码进链接来防止刷新丢失——用户全程留在这个页面上。
+  // 加载 Gumroad 的弹窗结账脚本。和 Paddle 一样是页面内弹窗，不会跳走整页。
+  // 但 Gumroad 没有"付款完成"的 JS 回调事件——用户付款后会在弹窗里看到一个 License Key
+  // （同时也会发邮件），需要用户把这个码贴回页面，由我们的服务端接口去 Gumroad 官方验证。
   useEffect(() => {
-    if (!PADDLE_CLIENT_TOKEN || !PADDLE_PRICE_ID) return; // 环境变量没配置时不加载，避免报错
+    if (!GUMROAD_PRODUCT_URL) return; // 环境变量没配置时不加载，避免报错
 
     const script = document.createElement('script');
-    script.src = 'https://cdn.paddle.com/paddle/v2/paddle.js';
+    script.src = 'https://gumroad.com/js/gumroad.js';
     script.async = true;
-    script.onload = () => {
-      if (window.Paddle) {
-        window.Paddle.Environment.set(PADDLE_ENV);
-        window.Paddle.Initialize({
-          token: PADDLE_CLIENT_TOKEN,
-          eventCallback: (event) => {
-            if (event.name === 'checkout.completed') {
-              setIsPaid(true);
-              setCheckoutLoading(false);
-            }
-            if (event.name === 'checkout.closed') {
-              setCheckoutLoading(false);
-            }
-          },
-        });
-        setPaddleReady(true);
-      }
-    };
+    script.onload = () => setGumroadReady(true);
     document.body.appendChild(script);
     return () => { document.body.removeChild(script); };
   }, []);
@@ -161,21 +147,43 @@ export default function Page() {
     }, 350);
   };
 
-  const handleUnlock = () => {
+  const handleOpenGumroad = () => {
     setError('');
-    if (!window.Paddle || !paddleReady) {
-      setError('Payment system is still loading. Please wait a moment and try again.');
-      return;
-    }
-    if (!PADDLE_PRICE_ID) {
+    if (!GUMROAD_PRODUCT_URL) {
       setError('Payment is not configured yet on this site.');
       return;
     }
-    setCheckoutLoading(true);
-    window.Paddle.Checkout.open({
-      items: [{ priceId: PADDLE_PRICE_ID, quantity: 1 }],
-      settings: { displayMode: 'overlay', theme: 'dark' },
-    });
+    // Gumroad 的弹窗脚本会自动接管带 gumroad-button class 的链接点击事件；
+    // 这里保留一个兜底：万一脚本还没加载完，直接在新标签页打开产品链接。
+    if (!gumroadReady) {
+      window.open(GUMROAD_PRODUCT_URL, '_blank');
+    }
+  };
+
+  const handleVerifyLicense = async () => {
+    if (!licenseKeyInput.trim()) {
+      setLicenseError('Please enter the license key from your Gumroad receipt.');
+      return;
+    }
+    setVerifyingLicense(true);
+    setLicenseError('');
+    try {
+      const res = await fetch('/api/verify-license', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ licenseKey: licenseKeyInput.trim() }),
+      });
+      const data = await res.json();
+      if (data.valid) {
+        setIsPaid(true);
+      } else {
+        setLicenseError(data.error || 'That license key could not be verified. Please check and try again.');
+      }
+    } catch (e) {
+      setLicenseError('Could not reach the verification server. Please check your connection and try again.');
+    } finally {
+      setVerifyingLicense(false);
+    }
   };
 
   const handleDownload = () => {
@@ -460,15 +468,40 @@ export default function Page() {
                     Get the complete classical text for your moving line, the full Najia six-line chart with
                     ruling/paired lines and hidden relatives, and a detailed month-by-month forecast for {result.targetYearGanZhi}.
                   </p>
-                  <button
-                    onClick={handleUnlock}
-                    disabled={checkoutLoading}
-                    className="bg-gradient-to-r from-[#9e2a2b] to-[#d4af37] hover:opacity-90 text-white font-bold px-8 py-3 rounded-xl shadow-lg disabled:opacity-50"
+
+                  <a
+                    href={GUMROAD_PRODUCT_URL}
+                    className="gumroad-button inline-block bg-gradient-to-r from-[#9e2a2b] to-[#d4af37] hover:opacity-90 text-white font-bold px-8 py-3 rounded-xl shadow-lg no-underline"
+                    onClick={handleOpenGumroad}
                   >
-                    {checkoutLoading ? 'Opening secure checkout…' : `Unlock Full Reading — ${PRICE_DISPLAY}`}
-                  </button>
-                  <p className="text-[10px] text-[#65605a] mt-3">Secure payment via Paddle · One-time payment, no subscription</p>
+                    {`Unlock Full Reading — ${PRICE_DISPLAY}`}
+                  </a>
+                  <p className="text-[10px] text-[#65605a] mt-3">Secure payment via Gumroad · One-time payment, no subscription</p>
                   {error && <p className="text-xs text-[#e08a8a] mt-3">{error}</p>}
+
+                  <div className="mt-8 pt-6 border-t border-[#2a2d37] max-w-sm mx-auto text-left">
+                    <p className="text-xs text-[#a39b8b] mb-2">
+                      Already paid? After checkout, Gumroad shows (and emails you) a <strong>License Key</strong> —
+                      paste it below to unlock:
+                    </p>
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        value={licenseKeyInput}
+                        onChange={(e) => setLicenseKeyInput(e.target.value)}
+                        placeholder="XXXXXXXX-XXXXXXXX-XXXXXXXX-XXXXXXXX"
+                        className="flex-grow bg-[#1a1d26] border border-[#343846] rounded-lg px-3 py-2 text-xs text-[#f3ece0] focus:outline-none focus:border-[#d4af37]"
+                      />
+                      <button
+                        onClick={handleVerifyLicense}
+                        disabled={verifyingLicense}
+                        className="px-4 py-2 bg-[#d4af37] hover:bg-[#e5c158] text-[#0a0b0e] font-bold text-xs rounded-lg disabled:opacity-50 whitespace-nowrap"
+                      >
+                        {verifyingLicense ? 'Checking…' : 'Unlock'}
+                      </button>
+                    </div>
+                    {licenseError && <p className="text-xs text-[#e08a8a] mt-2">{licenseError}</p>}
+                  </div>
                 </div>
               )}
 
@@ -568,7 +601,7 @@ export default function Page() {
             <span>&middot;</span>
             <Link href="/refund" className="hover:text-[#d4af37]">Refund Policy</Link>
           </div>
-          <p className="mt-3">Payments securely processed by Paddle.com, our Merchant of Record.</p>
+          <p className="mt-3">Payments securely processed by Gumroad, our Merchant of Record.</p>
         </footer>
       </div>
     </div>

@@ -48,9 +48,9 @@ export default function TermsPage() {
             <h2 className="text-lg font-bold text-[#d4af37] mb-2">4. Payment and Merchant of Record</h2>
             <p>
               Purchases made through the Service are processed by our online reseller and Merchant of Record,
-              Paddle.com Market Limited ("Paddle"), 30 Old Bailey, London, EC4M 7AU, United Kingdom. Paddle
-              handles payment processing, tax collection and remittance, and related customer service inquiries
-              for your order, including refund requests. See our{' '}
+              Gumroad, Inc. ("Gumroad"), San Francisco, California, USA. Gumroad handles payment processing, tax
+              collection and remittance, and related customer service inquiries for your order, including refund
+              requests. See our{' '}
               <Link href="/refund" className="text-[#d4af37] underline">Refund Policy</Link> for details.
             </p>
           </section>

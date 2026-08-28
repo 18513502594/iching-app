@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import { PRICE_DISPLAY } from '@/lib/paddle-config';
+import { PRICE_DISPLAY } from '@/lib/gumroad-config';
 
 export const metadata = {
   title: 'Pricing — I Ching Hexagram & Yearly Fortune Reading',
@@ -44,7 +44,7 @@ export default function PricingPage() {
         </div>
 
         <p className="text-xs text-[#65605a] mt-8">
-          Payments are securely processed by Paddle.com, our Merchant of Record. See our{' '}
+          Payments are securely processed by Gumroad, our Merchant of Record. See our{' '}
           <Link href="/terms" className="text-[#d4af37] underline">Terms of Service</Link>,{' '}
           <Link href="/privacy" className="text-[#d4af37] underline">Privacy Policy</Link>, and{' '}
           <Link href="/refund" className="text-[#d4af37] underline">Refund Policy</Link>.

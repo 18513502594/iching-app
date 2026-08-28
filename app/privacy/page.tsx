@@ -26,21 +26,22 @@ export default function PrivacyPage() {
           <section>
             <h2 className="text-lg font-bold text-[#d4af37] mb-2">2. Payment information</h2>
             <p>
-              If you purchase the full reading, payment is handled entirely by our Merchant of Record, Paddle.com
-              Market Limited ("Paddle"). We do not receive, process, or store your card details, PayPal information,
-              or other payment credentials. Paddle collects your email address and billing details as part of the
+              If you purchase the full reading, payment is handled entirely by our Merchant of Record, Gumroad,
+              Inc. ("Gumroad"). We do not receive, process, or store your card details, PayPal information,
+              or other payment credentials. Gumroad collects your email address and billing details as part of the
               checkout process, in accordance with{' '}
-              <a href="https://www.paddle.com/legal/privacy" target="_blank" rel="noopener noreferrer" className="text-[#d4af37] underline">
-                Paddle's own Privacy Policy
-              </a>. Paddle may share limited order information (such as your email and purchase confirmation) with
-              us for customer support and dispute-handling purposes.
+              <a href="https://gumroad.com/privacy" target="_blank" rel="noopener noreferrer" className="text-[#d4af37] underline">
+                Gumroad's own Privacy Policy
+              </a>. Gumroad may share limited order information (such as your email and purchase confirmation) with
+              us for customer support and dispute-handling purposes. After purchase, Gumroad issues a License Key
+              which you use on this site to unlock your reading — this key is not personally identifying on its own.
             </p>
           </section>
 
           <section>
             <h2 className="text-lg font-bold text-[#d4af37] mb-2">3. Cookies and analytics</h2>
             <p>
-              This site may use minimal technical cookies required for the checkout process (provided by Paddle)
+              This site may use minimal technical cookies required for the checkout process (provided by Gumroad)
               and standard hosting/analytics tools provided by our infrastructure provider (Vercel) to monitor
               site performance and detect abuse. These do not identify you personally beyond standard web server
               logs (e.g. IP address, browser type).
@@ -52,7 +53,7 @@ export default function PrivacyPage() {
             <p>
               Because birth data you enter is never stored by us, there is nothing for us to retain or delete on
               our end — it exists only in your browser's memory for the duration of your visit. Any billing data
-              retained by Paddle is governed by Paddle's own retention policy.
+              retained by Gumroad is governed by Gumroad's own retention policy.
             </p>
           </section>
 
@@ -61,7 +62,7 @@ export default function PrivacyPage() {
             <p>
               Depending on your location, you may have rights under data protection laws (such as the EU/UK GDPR)
               regarding personal data held about you. Since we do not retain your birth data, most such requests
-              would need to be directed to Paddle regarding your billing information — see their privacy policy
+              would need to be directed to Gumroad regarding your billing information — see their privacy policy
               linked above for how to exercise those rights.
             </p>
           </section>
