@@ -1,24 +1,55 @@
 'use client';
 
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { calculateFortune, CalcResult } from '@/lib/calc';
 import { CITY_LOCATIONS } from '@/lib/geo';
+import { getHexNameEn, LUCK_EN } from '@/lib/hexagram-names-en';
+import { generateFreeSummaryEn, generateFullReadingEn, palaceLabelEn } from '@/lib/interpret-en';
+import { PADDLE_CLIENT_TOKEN, PADDLE_PRICE_ID, PADDLE_ENV, PRICE_DISPLAY } from '@/lib/paddle-config';
 
-const LINE_LABEL = ['初爻', '二爻', '三爻', '四爻', '五爻', '上爻'];
+const LINE_LABEL = ['1st', '2nd', '3rd', '4th', '5th', '6th'];
+
+interface FormData {
+  birthYear: string;
+  birthMonth: string;
+  birthDay: string;
+  birthHour: string;
+  birthMinute: string;
+  gender: 'male' | 'female';
+  targetYear: string;
+  city: string;
+  customLongitude: string;
+  useCustomLongitude: boolean;
+  isOverseas: boolean;
+}
+
+const DEFAULT_FORM: FormData = {
+  birthYear: '1995',
+  birthMonth: '6',
+  birthDay: '15',
+  birthHour: '12',
+  birthMinute: '30',
+  gender: 'female',
+  targetYear: '2026',
+  city: 'Beijing, China',
+  customLongitude: '',
+  useCustomLongitude: false,
+  isOverseas: false,
+};
 
 function LineBars({
   lines, changingLine, shi,
 }: { lines: number[]; changingLine?: number; shi?: number }) {
   return (
-    <div className="space-y-2 max-w-[240px] my-6">
+    <div className="space-y-2 max-w-[260px] my-6">
       {lines.slice().reverse().map((line, idx) => {
         const lineNum = 6 - idx;
         const isChanging = lineNum === changingLine;
         const isShi = lineNum === shi;
         return (
           <div key={idx} className="flex items-center gap-2 text-xs">
-            <span className={`w-8 text-[10px] ${isChanging ? 'text-[#9e2a2b] font-bold' : 'text-[#8c8577]'}`}>
-              {lineNum === 6 ? '上爻' : lineNum === 1 ? '初爻' : `${lineNum}爻`}
+            <span className={`w-10 text-[10px] ${isChanging ? 'text-[#9e2a2b] font-bold' : 'text-[#8c8577]'}`}>
+              {LINE_LABEL[lineNum - 1]}
             </span>
             <div className="flex-grow">
               {line === 1 ? (
@@ -30,8 +61,8 @@ function LineBars({
                 </div>
               )}
             </div>
-            {shi !== undefined && <span className="text-[10px] w-8 text-[#d4af37]">{isShi ? '【世】' : ''}</span>}
-            {isChanging && <span className="text-[10px] text-[#9e2a2b]">●动</span>}
+            {shi !== undefined && <span className="text-[10px] w-10 text-[#d4af37]">{isShi ? 'Ruling' : ''}</span>}
+            {isChanging && <span className="text-[10px] text-[#9e2a2b] whitespace-nowrap">● moving</span>}
           </div>
         );
       })}
@@ -43,22 +74,13 @@ export default function Page() {
   const [step, setStep] = useState<'input' | 'casting' | 'result'>('input');
   const [castProgress, setCastProgress] = useState(0);
   const [error, setError] = useState('');
-
-  const [formData, setFormData] = useState({
-    birthYear: '1995',
-    birthMonth: '6',
-    birthDay: '15',
-    birthHour: '12',
-    birthMinute: '30',
-    gender: 'female' as 'male' | 'female',
-    targetYear: '2026',
-    city: '北京',
-    customLongitude: '',
-    useCustomLongitude: false,
-    isOverseas: false,
-  });
-
+  const [formData, setFormData] = useState<FormData>(DEFAULT_FORM);
   const [result, setResult] = useState<CalcResult | null>(null);
+
+  const [isPaid, setIsPaid] = useState(false);
+  const [paddleReady, setPaddleReady] = useState(false);
+  const [checkoutLoading, setCheckoutLoading] = useState(false);
+  const [downloadStatus, setDownloadStatus] = useState<'idle' | 'saved'>('idle');
 
   const resolvedLongitude = useMemo(() => {
     if (formData.useCustomLongitude) {
@@ -68,6 +90,50 @@ export default function Page() {
     const city = CITY_LOCATIONS.find(c => c.name === formData.city);
     return city ? city.longitude : 120;
   }, [formData.city, formData.customLongitude, formData.useCustomLongitude]);
+
+  function runCalculation(data: FormData, longitude: number) {
+    return calculateFortune({
+      birthYear: parseInt(data.birthYear) || 1995,
+      birthMonth: parseInt(data.birthMonth) || 6,
+      birthDay: parseInt(data.birthDay) || 15,
+      birthHour: parseInt(data.birthHour) || 12,
+      birthMinute: parseInt(data.birthMinute) || 0,
+      longitude,
+      isOverseas: data.isOverseas,
+      gender: data.gender,
+      targetYear: parseInt(data.targetYear) || 2026,
+    });
+  }
+
+  // 加载 Paddle.js 并初始化。Paddle 用页面内弹窗结账（不像 Stripe 会跳走整页），
+  // 所以不需要把生辰数据编码进链接来防止刷新丢失——用户全程留在这个页面上。
+  useEffect(() => {
+    if (!PADDLE_CLIENT_TOKEN || !PADDLE_PRICE_ID) return; // 环境变量没配置时不加载，避免报错
+
+    const script = document.createElement('script');
+    script.src = 'https://cdn.paddle.com/paddle/v2/paddle.js';
+    script.async = true;
+    script.onload = () => {
+      if (window.Paddle) {
+        window.Paddle.Environment.set(PADDLE_ENV);
+        window.Paddle.Initialize({
+          token: PADDLE_CLIENT_TOKEN,
+          eventCallback: (event) => {
+            if (event.name === 'checkout.completed') {
+              setIsPaid(true);
+              setCheckoutLoading(false);
+            }
+            if (event.name === 'checkout.closed') {
+              setCheckoutLoading(false);
+            }
+          },
+        });
+        setPaddleReady(true);
+      }
+    };
+    document.body.appendChild(script);
+    return () => { document.body.removeChild(script); };
+  }, []);
 
   const handleCalculate = () => {
     setError('');
@@ -79,21 +145,12 @@ export default function Page() {
         if (prev >= 100) {
           clearInterval(interval);
           try {
-            const res = calculateFortune({
-              birthYear: parseInt(formData.birthYear) || 1995,
-              birthMonth: parseInt(formData.birthMonth) || 6,
-              birthDay: parseInt(formData.birthDay) || 15,
-              birthHour: parseInt(formData.birthHour) || 12,
-              birthMinute: parseInt(formData.birthMinute) || 0,
-              longitude: resolvedLongitude,
-              isOverseas: formData.isOverseas,
-              gender: formData.gender,
-              targetYear: parseInt(formData.targetYear) || 2026,
-            });
+            const res = runCalculation(formData, resolvedLongitude);
             setResult(res);
+            setIsPaid(false);
             setStep('result');
           } catch (e: any) {
-            setError(e?.message || '排盘计算出错，请检查输入信息。');
+            setError(e?.message || 'Something went wrong while casting your hexagram. Please check your inputs.');
             setStep('input');
           }
           return 100;
@@ -103,26 +160,87 @@ export default function Page() {
     }, 350);
   };
 
+  const handleUnlock = () => {
+    setError('');
+    if (!window.Paddle || !paddleReady) {
+      setError('Payment system is still loading. Please wait a moment and try again.');
+      return;
+    }
+    if (!PADDLE_PRICE_ID) {
+      setError('Payment is not configured yet on this site.');
+      return;
+    }
+    setCheckoutLoading(true);
+    window.Paddle.Checkout.open({
+      items: [{ priceId: PADDLE_PRICE_ID, quantity: 1 }],
+      settings: { displayMode: 'overlay', theme: 'dark' },
+    });
+  };
+
+  const handleDownload = () => {
+    if (!result) return;
+    const lines: string[] = [];
+    lines.push('I CHING HEXAGRAM & YEARLY FORTUNE READING');
+    lines.push('='.repeat(50));
+    lines.push(`Birth data: ${result.lunarStr}`);
+    lines.push(`Four Pillars: ${result.baziStr}`);
+    lines.push(result.trueSolarNote);
+    lines.push(`Forecast Target: ${result.targetYearGanZhi}`);
+    lines.push('');
+    lines.push(`Primary Hexagram: ${result.originalHex.name} (${result.originalHex.palace})`);
+    lines.push(`Hexagram Text: ${result.originalHex.desc}`);
+    lines.push(`Image: ${result.originalHex.xiang}`);
+    lines.push('');
+    lines.push(`Moving Line ${result.changingLine} (${result.changingDetail?.name}): ${result.changingDetail?.ci}`);
+    lines.push(`Line Commentary: ${result.changingDetail?.xiang}`);
+    lines.push('');
+    lines.push(`Transformed Hexagram: ${result.transformedHex.name}`);
+    lines.push(`Hexagram Text: ${result.transformedHex.desc}`);
+    lines.push('');
+    lines.push('NAJIA SIX-LINE CHART');
+    result.najiaLines.slice().reverse().forEach(l => {
+      lines.push(`Line ${l.lineIndex}: ${l.stem}${l.branch} (${l.elem}) — ${l.relative}${l.isShi ? ' [Ruling]' : ''}${l.isYing ? ' [Paired]' : ''}`);
+    });
+    lines.push(`Void (Xunkong): ${result.xunKong.join(', ')}`);
+    lines.push('');
+    lines.push('MONTH-BY-MONTH FORECAST');
+    result.monthlyFortunes.forEach(m => {
+      lines.push(`Month ${m.month} (${m.term}) [${m.element}] — ${m.status} ${m.score}`);
+      lines.push(`  ${m.advice}`);
+    });
+
+    const blob = new Blob([lines.join('\n')], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `iching-reading-${result.targetYearGanZhi.split(' ')[0] || 'result'}.txt`;
+    a.click();
+    URL.revokeObjectURL(url);
+    setDownloadStatus('saved');
+    setTimeout(() => setDownloadStatus('idle'), 2000);
+  };
+
   return (
-    <div className="min-h-screen bg-[#0a0b0e] text-[#e2d9c8] font-serif p-4 md:p-8">
+    <div className="min-h-screen bg-[#0a0b0e] text-[#e2d9c8] font-serif p-4 md:p-8 print:bg-white print:text-black">
       <div className="max-w-4xl mx-auto">
         {/* Header */}
-        <header className="text-center mb-10">
+        <header className="text-center mb-10 print:hidden">
           <div className="inline-block px-4 py-1 rounded-full bg-[#d4af37]/10 border border-[#d4af37]/30 text-[#d4af37] text-xs tracking-widest uppercase mb-3 font-mono">
-            ☯ 周易正统纳甲与梅花易数算卦引擎
+            ☯ Classical I Ching Najia & Plum Blossom Casting Engine
           </div>
           <h1 className="text-3xl md:text-5xl font-bold text-[#f3ece0] tracking-wide mb-2">
-            周易六十四卦与流年运势推演
+            I Ching Hexagram & Yearly Fortune Reading
           </h1>
           <p className="text-sm text-[#a39b8b] max-w-lg mx-auto">
-            融合《周易》384爻全量原文、真太阳时校正农历干支、京房六爻纳甲装配及十二节气流月生克。
+            Combining the complete 384-line text of the I Ching, true solar time-corrected birth data,
+            classical Han-dynasty Najia line assignment, and month-by-month solar term forecasting.
           </p>
         </header>
 
         {step === 'input' && (
           <div className="bg-[#12141a] border border-[#2a2d37] rounded-2xl p-6 md:p-8 shadow-2xl">
             <h2 className="text-lg font-medium text-[#d4af37] border-b border-[#2a2d37] pb-3 mb-6 flex items-center gap-2">
-              <span>☯</span> 录入本命时空坐标
+              <span>☯</span> Enter Your Birth Details
             </h2>
 
             {error && (
@@ -133,17 +251,17 @@ export default function Page() {
 
             <div className="space-y-6">
               <div className="grid grid-cols-3 gap-4">
-                <Field label="出生年份 (公历)">
+                <Field label="Birth Year (Gregorian)">
                   <input type="number" value={formData.birthYear}
                     onChange={(e) => setFormData({ ...formData, birthYear: e.target.value })}
                     className={inputClass} />
                 </Field>
-                <Field label="月份">
+                <Field label="Month">
                   <input type="number" min="1" max="12" value={formData.birthMonth}
                     onChange={(e) => setFormData({ ...formData, birthMonth: e.target.value })}
                     className={inputClass} />
                 </Field>
-                <Field label="日期">
+                <Field label="Day">
                   <input type="number" min="1" max="31" value={formData.birthDay}
                     onChange={(e) => setFormData({ ...formData, birthDay: e.target.value })}
                     className={inputClass} />
@@ -151,12 +269,12 @@ export default function Page() {
               </div>
 
               <div className="grid grid-cols-2 gap-4">
-                <Field label="出生小时 (0-23时，钟表时间)">
+                <Field label="Birth Hour (0-23, clock time)">
                   <input type="number" min="0" max="23" value={formData.birthHour}
                     onChange={(e) => setFormData({ ...formData, birthHour: e.target.value })}
                     className={inputClass} />
                 </Field>
-                <Field label="分钟 (0-59分)">
+                <Field label="Minute (0-59)">
                   <input type="number" min="0" max="59" value={formData.birthMinute}
                     onChange={(e) => setFormData({ ...formData, birthMinute: e.target.value })}
                     className={inputClass} />
@@ -165,7 +283,7 @@ export default function Page() {
 
               <div>
                 <label className="block text-xs text-[#8c8577] mb-1">
-                  出生地 <span className="text-[#65605a]">（用于真太阳时校正，影响精确时辰判定）</span>
+                  Birthplace <span className="text-[#65605a]">(used for true solar time correction — affects your exact birth hour)</span>
                 </label>
                 <div className="grid grid-cols-2 gap-3">
                   <select
@@ -175,43 +293,41 @@ export default function Page() {
                     className={`${inputClass} disabled:opacity-40`}
                   >
                     {CITY_LOCATIONS.map(c => (
-                      <option key={c.name} value={c.name}>{c.name}（东经{c.longitude}°）</option>
+                      <option key={c.name} value={c.name}>{c.name} ({c.longitude >= 0 ? 'E' : 'W'}{Math.abs(c.longitude)}°)</option>
                     ))}
                   </select>
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="number" step="0.01" placeholder="或手动输入经度"
-                      value={formData.customLongitude}
-                      onChange={(e) => setFormData({ ...formData, customLongitude: e.target.value, useCustomLongitude: e.target.value !== '' })}
-                      className={inputClass}
-                    />
-                  </div>
+                  <input
+                    type="number" step="0.01" placeholder="Or enter longitude manually"
+                    value={formData.customLongitude}
+                    onChange={(e) => setFormData({ ...formData, customLongitude: e.target.value, useCustomLongitude: e.target.value !== '' })}
+                    className={inputClass}
+                  />
                 </div>
                 <label className="flex items-center gap-2 mt-2 text-[11px] text-[#8c8577]">
                   <input type="checkbox" checked={formData.isOverseas}
                     onChange={(e) => setFormData({ ...formData, isOverseas: e.target.checked })}
                     className="accent-[#d4af37]" />
-                  出生地位于海外（按当地最近时区标准经线校正，而非东八区）
+                  Birthplace is outside China (correct against the nearest standard time meridian instead of UTC+8)
                 </label>
               </div>
 
               <div className="grid grid-cols-2 gap-4">
-                <Field label="性别">
+                <Field label="Gender">
                   <select value={formData.gender}
                     onChange={(e) => setFormData({ ...formData, gender: e.target.value as 'male' | 'female' })}
                     className={inputClass}>
-                    <option value="female">坤造 (女)</option>
-                    <option value="male">乾造 (男)</option>
+                    <option value="female">Female</option>
+                    <option value="male">Male</option>
                   </select>
                 </Field>
-                <Field label="测算目标流年">
+                <Field label="Target Year to Forecast">
                   <select value={formData.targetYear}
                     onChange={(e) => setFormData({ ...formData, targetYear: e.target.value })}
                     className={inputClass}>
-                    <option value="2026">2026 丙午马年</option>
-                    <option value="2027">2027 丁未羊年</option>
-                    <option value="2025">2025 乙巳蛇年</option>
-                    <option value="2028">2028 戊申猴年</option>
+                    <option value="2026">2026 — Year of the Horse</option>
+                    <option value="2027">2027 — Year of the Goat</option>
+                    <option value="2025">2025 — Year of the Snake</option>
+                    <option value="2028">2028 — Year of the Monkey</option>
                   </select>
                 </Field>
               </div>
@@ -220,9 +336,12 @@ export default function Page() {
                 onClick={handleCalculate}
                 className="w-full mt-6 bg-gradient-to-r from-[#9e2a2b] to-[#b83b27] hover:from-[#b83b27] hover:to-[#d4af37] text-white font-medium py-3.5 rounded-xl transition-all shadow-lg shadow-[#9e2a2b]/30 flex items-center justify-center gap-2 text-base"
               >
-                <span>开始演卦起算</span>
+                <span>Cast My Hexagram</span>
                 <span>→</span>
               </button>
+              <p className="text-center text-[11px] text-[#65605a]">
+                Free overview included. Full detailed reading available for {PRICE_DISPLAY}.
+              </p>
             </div>
           </div>
         )}
@@ -235,10 +354,10 @@ export default function Page() {
             </div>
             <div className="space-y-2">
               <p className="text-sm text-[#f3ece0] font-medium">
-                {castProgress < 30 && '真太阳时校正，排布农历干支与生辰四柱八字...'}
-                {castProgress >= 30 && castProgress < 60 && '梅花易数年月日时起卦，推导本卦变卦...'}
-                {castProgress >= 60 && castProgress < 90 && '装配京房六爻纳甲、安世应与六亲旬空...'}
-                {castProgress >= 90 && '对齐《周易》384爻原文与流年节气...'}
+                {castProgress < 30 && 'Correcting for true solar time and building your birth chart...'}
+                {castProgress >= 30 && castProgress < 60 && 'Casting your primary and transformed hexagrams...'}
+                {castProgress >= 60 && castProgress < 90 && 'Assigning Najia stems, branches, and ruling/paired lines...'}
+                {castProgress >= 90 && 'Matching the classical I Ching text to your reading...'}
               </p>
               <div className="w-full bg-[#1a1d26] h-2 rounded-full overflow-hidden max-w-xs mx-auto">
                 <div className="bg-gradient-to-r from-[#9e2a2b] to-[#d4af37] h-full transition-all duration-300"
@@ -248,138 +367,197 @@ export default function Page() {
           </div>
         )}
 
-        {step === 'result' && result && (
-          <div className="space-y-8">
-            <div className="bg-[#12141a] border border-[#2a2d37] rounded-2xl p-6 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-              <div>
-                <div className="text-xs text-[#d4af37] font-mono mb-1">
-                  【农历阴历】{result.lunarStr} • 【八字四柱】{result.baziStr}
+        {step === 'result' && result && (() => {
+          const originalNameEn = getHexNameEn(result.originalHex.upperCode, result.originalHex.lowerCode);
+          const transformedNameEn = getHexNameEn(result.transformedHex.upperCode, result.transformedHex.lowerCode);
+          const luckInfo = LUCK_EN[result.originalHex.luck] ?? { label: 'Neutral', tone: 'neutral' as const };
+
+          return (
+            <div className="space-y-8">
+              <div className="bg-[#12141a] border border-[#2a2d37] rounded-2xl p-6 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 print:hidden">
+                <div>
+                  <div className="text-xs text-[#d4af37] font-mono mb-1">
+                    {result.lunarStr} • {result.baziStr}
+                  </div>
+                  <div className="text-[11px] text-[#8c8577] mb-2">{result.trueSolarNote}</div>
+                  <h2 className="text-2xl text-[#f3ece0] font-bold">
+                    Forecast Target: {result.targetYearGanZhi}
+                  </h2>
                 </div>
-                <div className="text-[11px] text-[#8c8577] mb-2">{result.trueSolarNote}</div>
-                <h2 className="text-2xl text-[#f3ece0] font-bold">
-                  测算目标：{result.targetYearGanZhi} 运势
-                </h2>
-              </div>
-              <button onClick={() => setStep('input')}
-                className="px-4 py-2 bg-[#1a1d26] hover:bg-[#252936] text-[#d4af37] border border-[#d4af37]/30 rounded-lg text-xs">
-                ↺ 重新输入
-              </button>
-            </div>
-
-            <div className="grid md:grid-cols-2 gap-6">
-              <div className="bg-[#12141a] border border-[#d4af37]/40 rounded-2xl p-6 relative">
-                <div className="absolute top-4 right-4 text-xs px-2 py-0.5 rounded bg-[#d4af37]/20 text-[#d4af37]">
-                  主卦 ({result.originalHex.palace})
-                </div>
-                <h3 className="text-xl font-bold text-[#f3ece0] mb-1">{result.originalHex.name}</h3>
-                <p className="text-xs text-[#a39b8b] mb-4">
-                  五行属{result.originalHex.element} • {result.originalHex.category} • 吉凶：【{result.originalHex.luck}】
-                </p>
-                <LineBars lines={result.originalLines} changingLine={result.changingLine} shi={result.originalHex.shi} />
-                <p className="text-xs text-[#c5bcac] leading-relaxed bg-[#1a1d26] p-3 rounded-lg border border-[#2a2d37] mb-2">
-                  <strong>卦辞：</strong>{result.originalHex.desc}
-                </p>
-                <p className="text-xs text-[#a39b8b] leading-relaxed bg-[#1a1d26] p-3 rounded-lg border border-[#2a2d37]">
-                  <strong>大象：</strong>{result.originalHex.xiang}
-                </p>
+                <button onClick={() => setStep('input')}
+                  className="px-4 py-2 bg-[#1a1d26] hover:bg-[#252936] text-[#d4af37] border border-[#d4af37]/30 rounded-lg text-xs whitespace-nowrap">
+                  ↺ Start Over
+                </button>
               </div>
 
-              <div className="bg-[#12141a] border border-[#2a2d37] rounded-2xl p-6 relative">
-                <div className="absolute top-4 right-4 text-xs px-2 py-0.5 rounded bg-emerald-900/40 text-emerald-400">
-                  之卦 (变卦)
-                </div>
-                <h3 className="text-xl font-bold text-[#f3ece0] mb-1">{result.transformedHex.name}</h3>
-                <p className="text-xs text-[#a39b8b] mb-4">
-                  五行属{result.transformedHex.element} • {result.transformedHex.palace} • 【{result.transformedHex.luck}】
-                </p>
-                <LineBars lines={result.transformedLines} />
-                <p className="text-xs text-[#c5bcac] leading-relaxed bg-[#1a1d26] p-3 rounded-lg border border-[#2a2d37] mb-2">
-                  <strong>卦辞：</strong>{result.transformedHex.desc}
-                </p>
-                <p className="text-xs text-[#a39b8b] leading-relaxed bg-[#1a1d26] p-3 rounded-lg border border-[#2a2d37]">
-                  <strong>大象：</strong>{result.transformedHex.xiang}
-                </p>
-              </div>
-            </div>
-
-            <div className="bg-[#12141a] border border-[#9e2a2b]/50 rounded-2xl p-6">
-              <h3 className="text-sm font-bold text-[#d4af37] border-b border-[#2a2d37] pb-2 mb-3 flex items-center gap-2">
-                <span>☯</span> 发动爻辞详解 (第 {result.changingLine} 爻：{result.changingDetail?.name})
-              </h3>
-              <p className="text-base text-[#f3ece0] font-bold mb-2">【爻辞】{result.changingDetail?.ci}</p>
-              <p className="text-xs text-[#d4af37] mb-3">【小象传】{result.changingDetail?.xiang}</p>
-              <p className="text-xs text-[#a39b8b] leading-relaxed bg-[#1a1d26] p-3 rounded-lg border border-[#2a2d37]">
-                <strong>机锋解析：</strong>动爻乃吉凶转化之枢纽。目标流年期间，局势将围绕此爻所示之关键节点展开，宜契合爻辞智慧顺势而为。
-              </p>
-            </div>
-
-            <div className="bg-[#12141a] border border-[#2a2d37] rounded-2xl p-6">
-              <h3 className="text-sm font-bold text-[#d4af37] border-b border-[#2a2d37] pb-3 mb-4 flex flex-wrap items-center justify-between gap-2">
-                <span>☯ 京房六爻纳甲排盘 (宫属：{result.originalHex.palace})</span>
-                <span className="text-xs font-normal text-[#8c8577]">
-                  旬空：{result.xunKong[0]}、{result.xunKong[1]}
-                </span>
-              </h3>
-              <div className="overflow-x-auto">
-                <table className="w-full text-xs text-left border-collapse">
-                  <thead>
-                    <tr className="border-b border-[#2a2d37] text-[#8c8577]">
-                      <th className="py-2">爻位</th>
-                      <th className="py-2">纳甲干支</th>
-                      <th className="py-2">地支五行</th>
-                      <th className="py-2">六亲属性</th>
-                      <th className="py-2">世应/空亡</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-[#2a2d37]/50 text-[#c5bcac]">
-                    {result.najiaLines.slice().reverse().map((item) => {
-                      const isKong = result.xunKong.includes(item.branch);
-                      return (
-                        <tr key={item.lineIndex} className={item.lineIndex === result.changingLine ? "bg-[#9e2a2b]/10" : ""}>
-                          <td className="py-2.5 font-bold">{LINE_LABEL[item.lineIndex - 1]}</td>
-                          <td className="py-2.5 text-[#f3ece0]">{item.stem}{item.branch}</td>
-                          <td className="py-2.5">{item.elem}</td>
-                          <td className="py-2.5 text-[#d4af37]">{item.relative}</td>
-                          <td className="py-2.5 space-x-1">
-                            {item.isShi && <span className="text-[#d4af37] font-bold">【世】</span>}
-                            {item.isYing && <span className="text-[#8fb3d9] font-bold">【应】</span>}
-                            {isKong && <span className="text-[#65605a]">（空）</span>}
-                            {item.lineIndex === result.changingLine && <span className="text-[#9e2a2b]">● 动</span>}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-
-            <div className="bg-[#12141a] border border-[#2a2d37] rounded-2xl p-6 md:p-8">
-              <h3 className="text-lg font-bold text-[#d4af37] border-b border-[#2a2d37] pb-4 mb-6 flex justify-between items-center">
-                <span>📅 {result.targetYearGanZhi} 十二节气流月运势详析</span>
-                <span className="text-xs font-normal text-[#8c8577]">依据节气律吕与卦身生克</span>
-              </h3>
-              <div className="grid md:grid-cols-2 gap-4">
-                {result.monthlyFortunes.map((m) => (
-                  <div key={m.month} className="bg-[#1a1d26] border border-[#2a2d37] p-4 rounded-xl flex items-start gap-4">
-                    <div className="bg-[#222632] text-[#d4af37] font-bold text-center p-2 rounded-lg min-w-[50px]">
-                      <div className="text-xs">{m.month}月</div>
-                      <div className="text-[10px] text-[#8c8577]">{m.element}气</div>
+              {isPaid && (
+                <div className="bg-gradient-to-r from-[#9e2a2b]/30 to-[#d4af37]/20 border-2 border-[#d4af37] rounded-2xl p-5 print:hidden">
+                  <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+                    <div>
+                      <p className="text-sm font-bold text-[#f3ece0] mb-1">⚠️ Save your result now</p>
+                      <p className="text-xs text-[#e2d9c8]">
+                        This reading isn't stored on any account — closing or refreshing this page means it's gone.
+                        Download a copy or save a PDF before you leave.
+                      </p>
                     </div>
-                    <div className="space-y-1">
-                      <div className="flex items-center gap-2">
-                        <span className="text-xs font-bold text-[#f3ece0]">{m.term}</span>
-                        <span className="text-[10px] text-[#d4af37]">{m.score}</span>
-                        <span className="text-[10px] px-1.5 py-0.2 rounded bg-[#d4af37]/10 text-[#d4af37]">{m.status}</span>
-                      </div>
-                      <p className="text-xs text-[#a39b8b] leading-relaxed">{m.advice}</p>
+                    <div className="flex gap-2 shrink-0">
+                      <button onClick={handleDownload}
+                        className="px-4 py-2 bg-[#d4af37] hover:bg-[#e5c158] text-[#0a0b0e] font-bold text-xs rounded-lg whitespace-nowrap">
+                        {downloadStatus === 'saved' ? '✓ Downloaded' : '⬇ Download Reading (.txt)'}
+                      </button>
+                      <button onClick={() => window.print()}
+                        className="px-4 py-2 bg-[#1a1d26] hover:bg-[#252936] text-[#f3ece0] border border-[#d4af37]/40 text-xs rounded-lg whitespace-nowrap">
+                        🖨 Save as PDF
+                      </button>
                     </div>
                   </div>
-                ))}
+                </div>
+              )}
+
+              <div className="grid md:grid-cols-2 gap-6">
+                <div className="bg-[#12141a] border border-[#d4af37]/40 rounded-2xl p-6 relative">
+                  <div className="absolute top-4 right-4 text-xs px-2 py-0.5 rounded bg-[#d4af37]/20 text-[#d4af37]">
+                    Primary Hexagram ({palaceLabelEn(result.originalHex.palace)})
+                  </div>
+                  <h3 className="text-xl font-bold text-[#f3ece0] mb-1">
+                    {originalNameEn.pinyin} — {originalNameEn.gloss}
+                  </h3>
+                  <p className="text-xs text-[#a39b8b] mb-1">{result.originalHex.name} · {result.originalHex.category}</p>
+                  <p className="text-xs mb-4">
+                    <span className={`inline-block px-2 py-0.5 rounded font-bold ${
+                      luckInfo.tone === 'great' || luckInfo.tone === 'good' ? 'bg-emerald-900/40 text-emerald-400' :
+                      luckInfo.tone === 'bad' || luckInfo.tone === 'caution' ? 'bg-[#9e2a2b]/30 text-[#e08a8a]' :
+                      'bg-[#2a2d37] text-[#a39b8b]'
+                    }`}>{luckInfo.label}</span>
+                  </p>
+                  <LineBars lines={result.originalLines} changingLine={result.changingLine} shi={result.originalHex.shi} />
+                  <p className="text-xs text-[#c5bcac] leading-relaxed bg-[#1a1d26] p-3 rounded-lg border border-[#2a2d37]">
+                    {generateFreeSummaryEn(result.originalHex)}
+                  </p>
+                </div>
+
+                <div className="bg-[#12141a] border border-[#2a2d37] rounded-2xl p-6 relative">
+                  <div className="absolute top-4 right-4 text-xs px-2 py-0.5 rounded bg-emerald-900/40 text-emerald-400">
+                    Transformed Hexagram
+                  </div>
+                  <h3 className="text-xl font-bold text-[#f3ece0] mb-1">
+                    {transformedNameEn.pinyin} — {transformedNameEn.gloss}
+                  </h3>
+                  <p className="text-xs text-[#a39b8b] mb-4">{result.transformedHex.name} · {palaceLabelEn(result.transformedHex.palace)}</p>
+                  <LineBars lines={result.transformedLines} />
+                  <p className="text-xs text-[#8c8577] leading-relaxed bg-[#1a1d26] p-3 rounded-lg border border-[#2a2d37]">
+                    This is what your situation is shifting toward. Full interpretation is part of the detailed reading below.
+                  </p>
+                </div>
               </div>
+
+              {!isPaid && (
+                <div className="bg-gradient-to-b from-[#1a1d26] to-[#12141a] border-2 border-dashed border-[#d4af37]/40 rounded-2xl p-8 text-center print:hidden">
+                  <div className="text-3xl mb-3">🔒</div>
+                  <h3 className="text-lg font-bold text-[#f3ece0] mb-2">Unlock Your Full Reading</h3>
+                  <p className="text-xs text-[#a39b8b] max-w-md mx-auto mb-5">
+                    Get the complete classical text for your moving line, the full Najia six-line chart with
+                    ruling/paired lines and hidden relatives, and a detailed month-by-month forecast for {result.targetYearGanZhi}.
+                  </p>
+                  <button
+                    onClick={handleUnlock}
+                    disabled={checkoutLoading}
+                    className="bg-gradient-to-r from-[#9e2a2b] to-[#d4af37] hover:opacity-90 text-white font-bold px-8 py-3 rounded-xl shadow-lg disabled:opacity-50"
+                  >
+                    {checkoutLoading ? 'Opening secure checkout…' : `Unlock Full Reading — ${PRICE_DISPLAY}`}
+                  </button>
+                  <p className="text-[10px] text-[#65605a] mt-3">Secure payment via Paddle · One-time payment, no subscription</p>
+                  {error && <p className="text-xs text-[#e08a8a] mt-3">{error}</p>}
+                </div>
+              )}
+
+              {isPaid && (
+                <>
+                  <div className="bg-[#12141a] border border-[#9e2a2b]/50 rounded-2xl p-6">
+                    <h3 className="text-sm font-bold text-[#d4af37] border-b border-[#2a2d37] pb-2 mb-3 flex items-center gap-2">
+                      <span>☯</span> Full Reading &amp; Moving Line Analysis (Line {result.changingLine}: {result.changingDetail?.name})
+                    </h3>
+                    <p className="text-xs text-[#8c8577] mb-3 leading-relaxed">
+                      {generateFullReadingEn(result.originalHex, result.changingLine, result.monthlyFortunes, result.targetYearGanZhi)}
+                    </p>
+                    <div className="bg-[#1a1d26] p-4 rounded-lg border border-[#2a2d37] space-y-2">
+                      <p className="text-base text-[#f3ece0] font-bold">Hexagram Text (Original): {result.originalHex.desc}</p>
+                      <p className="text-xs text-[#a39b8b]">Image (Daxiang): {result.originalHex.xiang}</p>
+                      <p className="text-base text-[#f3ece0] font-bold pt-2 border-t border-[#2a2d37]">Moving Line Text: {result.changingDetail?.ci}</p>
+                      <p className="text-xs text-[#d4af37]">Line Commentary (Xiaoxiang): {result.changingDetail?.xiang}</p>
+                    </div>
+                  </div>
+
+                  <div className="bg-[#12141a] border border-[#2a2d37] rounded-2xl p-6">
+                    <h3 className="text-sm font-bold text-[#d4af37] border-b border-[#2a2d37] pb-3 mb-4 flex flex-wrap items-center justify-between gap-2">
+                      <span>☯ Najia Six-Line Chart ({palaceLabelEn(result.originalHex.palace)})</span>
+                      <span className="text-xs font-normal text-[#8c8577]">
+                        Void (Xunkong): {result.xunKong[0]}, {result.xunKong[1]}
+                      </span>
+                    </h3>
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-xs text-left border-collapse">
+                        <thead>
+                          <tr className="border-b border-[#2a2d37] text-[#8c8577]">
+                            <th className="py-2">Line</th>
+                            <th className="py-2">Stem-Branch</th>
+                            <th className="py-2">Element</th>
+                            <th className="py-2">Relative</th>
+                            <th className="py-2">Ruling/Paired/Void</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-[#2a2d37]/50 text-[#c5bcac]">
+                          {result.najiaLines.slice().reverse().map((item) => {
+                            const isKong = result.xunKong.includes(item.branch);
+                            return (
+                              <tr key={item.lineIndex} className={item.lineIndex === result.changingLine ? "bg-[#9e2a2b]/10" : ""}>
+                                <td className="py-2.5 font-bold">{LINE_LABEL[item.lineIndex - 1]}</td>
+                                <td className="py-2.5 text-[#f3ece0]">{item.stem}{item.branch}</td>
+                                <td className="py-2.5">{item.elem}</td>
+                                <td className="py-2.5 text-[#d4af37]">{item.relative}</td>
+                                <td className="py-2.5 space-x-1">
+                                  {item.isShi && <span className="text-[#d4af37] font-bold">Ruling</span>}
+                                  {item.isYing && <span className="text-[#8fb3d9] font-bold">Paired</span>}
+                                  {isKong && <span className="text-[#65605a]">(Void)</span>}
+                                  {item.lineIndex === result.changingLine && <span className="text-[#9e2a2b]">● moving</span>}
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+
+                  <div className="bg-[#12141a] border border-[#2a2d37] rounded-2xl p-6 md:p-8">
+                    <h3 className="text-lg font-bold text-[#d4af37] border-b border-[#2a2d37] pb-4 mb-6 flex justify-between items-center">
+                      <span>📅 {result.targetYearGanZhi} — Month-by-Month Forecast</span>
+                      <span className="text-xs font-normal text-[#8c8577]">Based on solar terms &amp; elemental interaction</span>
+                    </h3>
+                    <div className="grid md:grid-cols-2 gap-4">
+                      {result.monthlyFortunes.map((m) => (
+                        <div key={m.month} className="bg-[#1a1d26] border border-[#2a2d37] p-4 rounded-xl flex items-start gap-4">
+                          <div className="bg-[#222632] text-[#d4af37] font-bold text-center p-2 rounded-lg min-w-[56px]">
+                            <div className="text-xs">Mo. {m.month}</div>
+                            <div className="text-[10px] text-[#8c8577]">{m.element}</div>
+                          </div>
+                          <div className="space-y-1">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="text-xs font-bold text-[#f3ece0]">{m.term}</span>
+                              <span className="text-[10px] text-[#d4af37]">{m.score}</span>
+                              <span className="text-[10px] px-1.5 py-0.5 rounded bg-[#d4af37]/10 text-[#d4af37]">{m.status}</span>
+                            </div>
+                            <p className="text-xs text-[#a39b8b] leading-relaxed">{m.advice}</p>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </>
+              )}
             </div>
-          </div>
-        )}
+          );
+        })()}
       </div>
     </div>
   );
