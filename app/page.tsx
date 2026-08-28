@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useEffect, useMemo, useState } from 'react';
+import Link from 'next/link';
 import { calculateFortune, CalcResult } from '@/lib/calc';
 import { CITY_LOCATIONS } from '@/lib/geo';
 import { getHexNameEn, LUCK_EN } from '@/lib/hexagram-names-en';
@@ -558,6 +559,17 @@ export default function Page() {
             </div>
           );
         })()}
+
+        <footer className="mt-16 pt-6 border-t border-[#2a2d37] text-center text-[10px] text-[#65605a] print:hidden">
+          <div className="flex justify-center gap-4 flex-wrap">
+            <Link href="/terms" className="hover:text-[#d4af37]">Terms of Service</Link>
+            <span>&middot;</span>
+            <Link href="/privacy" className="hover:text-[#d4af37]">Privacy Policy</Link>
+            <span>&middot;</span>
+            <Link href="/refund" className="hover:text-[#d4af37]">Refund Policy</Link>
+          </div>
+          <p className="mt-3">Payments securely processed by Paddle.com, our Merchant of Record.</p>
+        </footer>
       </div>
     </div>
   );
